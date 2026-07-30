@@ -1,25 +1,43 @@
-## Tor for Android
+## Tor for Android (LTechnologies0 fork)
 
-This project was created to build Tor for Android from source using Gitlab CI/CD.
+Fork of [Gedsh/Tor-Android-build-script](https://github.com/Gedsh/Tor-Android-build-script)
+used by **[OnionVPN](https://github.com/LTechnologies0/OnionVPN)** so Tor Android builds and
+published binaries are under our control.
 
-Precompiled binaries are used in **InviZible Pro** - Android application for Internet privacy and security.
+Upstream builds Tor for Android from source (GitLab CI / NDK). This fork keeps that pipeline
+and publishes **GitHub Release** assets that OnionVPN imports at build time via
+`scripts/fetch-native-binaries.sh`.
 
-### [Google Play stable version](https://play.google.com/store/apps/details?id=pan.alexander.tordnscrypt.gp)
+### Download precompiled `libtor.so` (OnionVPN source of truth)
 
-### [Download the latest beta version](https://github.com/Gedsh/InviZible/releases/latest)
+Release assets (latest):
 
-### [IzzyOnDroid F-Droid beta version](https://apt.izzysoft.de/fdroid/index/apk/pan.alexander.tordnscrypt)
+| ABI | Asset |
+|-----|--------|
+| armeabi-v7a | [`libtor-armeabi-v7a.so`](https://github.com/LTechnologies0/Tor-Android-build-script/releases/latest/download/libtor-armeabi-v7a.so) |
+| arm64-v8a | [`libtor-arm64-v8a.so`](https://github.com/LTechnologies0/Tor-Android-build-script/releases/latest/download/libtor-arm64-v8a.so) |
+| x86_64 | [`libtor-x86_64.so`](https://github.com/LTechnologies0/Tor-Android-build-script/releases/latest/download/libtor-x86_64.so) |
 
-You can download the latest precompiled Tor binaries from the links:
+All releases: https://github.com/LTechnologies0/Tor-Android-build-script/releases
 
-## [Tor for Android ARMEABI](https://gitlab.com/Gedsh/tor-android-build-script/-/jobs/artifacts/master/raw/tor-android-binary/src/main/libs/armeabi-v7a/libtor.so?job=android%20r23b%2022%20default%20armeabi-v7a)
+### Build (GitLab CI)
 
-## [Tor for Android ARM64](https://gitlab.com/Gedsh/tor-android-build-script/-/jobs/artifacts/master/raw/tor-android-binary/src/main/libs/arm64/libtor.so?job=android%20r23b%2022%20default%20arm64-v8a)
+Original jobs live in `.gitlab-ci.yml` (NDK r23b). Mirror / republish to GitHub Releases with:
 
-## [Tor for Android x86_64](https://gitlab.com/Gedsh/tor-android-build-script/-/jobs/artifacts/master/raw/tor-android-binary/src/main/libs/x86_64/libtor.so?job=android%20r23b%2022%20default%20x86_64)
+```bash
+./scripts/publish-github-release.sh
+```
+
+Or let GitHub Actions (`.github/workflows/publish-binaries.yml`) upload assets when you push a `tor-*` tag.
+
+### Upstream
+
+- Script / patches: [Gedsh/Tor-Android-build-script](https://github.com/Gedsh/Tor-Android-build-script) @ Apache-2.0
+- Consumer app historically: InviZible Pro
 
 ## License
 
-Copyright &copy; 2019-2026 by Garmatin Oleksandr invizible.soft@gmail.com
+Copyright © 2019-2026 by Garmatin Oleksandr invizible.soft@gmail.com  
+Fork maintained for OnionVPN / LTechnologies0.
 
 This code is released under the [Apache License version 2.0](https://www.apache.org/licenses/LICENSE-2.0)
