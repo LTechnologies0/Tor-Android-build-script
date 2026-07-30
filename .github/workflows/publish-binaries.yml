@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e..g. tor-0.4.9.11-dev)"
+        description: "Release tag (e.g. tor-0.4.9.11-dev)"
         required: true
         default: "tor-0.4.9.11-dev"
 
