@@ -1,0 +1,166 @@
+# Build Tor + pluggable transports and publish GitHub Release assets for OnionVPN.
+#
+# Tags:
+#   tor-*  — full publish (libtor republish + PT build)
+#   pt-*   — PT binaries only
+name: Build and publish Tor + PTs
+
+on:
+  push:
+    tags:
+      - "tor-*"
+      - "pt-*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. tor-0.4.9.11-dev+pts or pt-2026.07.31)"
+        required: true
+        default: "pt-nightly"
+      build_tor:
+        description: "Also republish libtor.so from Gedsh GitLab CI"
+        type: boolean
+        default: true
+      build_pts:
+        description: "Build lyrebird + conjure from source"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+env:
+  GOTOOLCHAIN: auto
+
+jobs:
+  build-pts:
+    if: >
+      startsWith(github.ref, 'refs/tags/pt-') ||
+      startsWith(github.ref, 'refs/tags/tor-') ||
+      (github.event_name == 'workflow_dispatch' && inputs.build_pts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r28c
+          link-to-sdk: true
+
+      - name: Build pluggable transports
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ABIS: arm64-v8a x86_64 armeabi-v7a
+          API_LEVEL: "21"
+        run: |
+          chmod +x scripts/build-pluggable-transports.sh
+          ./scripts/build-pluggable-transports.sh
+
+      - name: Upload PT artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pluggable-transports
+          path: |
+            dist/pts/**
+          if-no-files-found: error
+
+  publish:
+    needs: [build-pts]
+    if: always() && (needs.build-pts.result == 'success' || needs.build-pts.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          BUILD_TOR=false
+          BUILD_PTS=false
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            BUILD_TOR="${{ inputs.build_tor }}"
+            BUILD_PTS="${{ inputs.build_pts }}"
+          elif [[ "$TAG" == tor-* ]]; then
+            BUILD_TOR=true
+            BUILD_PTS=true
+          elif [[ "$TAG" == pt-* ]]; then
+            BUILD_PTS=true
+          fi
+          echo "build_tor=$BUILD_TOR" >> "$GITHUB_OUTPUT"
+          echo "build_pts=$BUILD_PTS" >> "$GITHUB_OUTPUT"
+
+      - name: Download PT artifacts
+        if: steps.meta.outputs.build_pts == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: pluggable-transports
+          path: dist/pts
+
+      - name: Fetch libtor (Gedsh CI republish)
+        if: steps.meta.outputs.build_tor == 'true'
+        run: |
+          mkdir -p dist/tor
+          curl -fsSL -L -o dist/tor/libtor-armeabi-v7a.so \
+            'https://gitlab.com/Gedsh/tor-android-build-script/-/jobs/artifacts/master/raw/tor-android-binary/src/main/libs/armeabi-v7a/libtor.so?job=android%20r23b%2022%20default%20armeabi-v7a'
+          curl -fsSL -L -o dist/tor/libtor-arm64-v8a.so \
+            'https://gitlab.com/Gedsh/tor-android-build-script/-/jobs/artifacts/master/raw/tor-android-binary/src/main/libs/arm64/libtor.so?job=android%20r23b%2022%20default%20arm64-v8a'
+          curl -fsSL -L -o dist/tor/libtor-x86_64.so \
+            'https://gitlab.com/Gedsh/tor-android-build-script/-/jobs/artifacts/master/raw/tor-android-binary/src/main/libs/x86_64/libtor.so?job=android%20r23b%2022%20default%20x86_64'
+          ls -lh dist/tor/
+
+      - name: Stage release assets
+        run: |
+          mkdir -p dist/release
+          if [ -d dist/tor ]; then
+            cp -f dist/tor/libtor-*.so dist/release/
+          fi
+          if [ -d dist/pts ]; then
+            for abi in arm64-v8a x86_64 armeabi-v7a; do
+              [[ -f "dist/pts/$abi/libLyrebird.so" ]] && cp -f "dist/pts/$abi/libLyrebird.so" "dist/release/libLyrebird-${abi}.so"
+              [[ -f "dist/pts/$abi/libConjure.so" ]] && cp -f "dist/pts/$abi/libConjure.so" "dist/release/libConjure-${abi}.so"
+            done
+            [[ -f dist/pts/CLIENT_TRANSPORT_PLUGIN.txt ]] && cp -f dist/pts/CLIENT_TRANSPORT_PLUGIN.txt dist/release/
+          fi
+          ls -lh dist/release/
+          (cd dist/release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+      - name: Create / update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          NOTES="$(cat <<EOF
+          ## Tor Android + pluggable transports (OnionVPN)
+
+          Controlled builds for [OnionVPN](https://github.com/LTechnologies0/OnionVPN).
+
+          ### Tor
+          - \`libtor-<abi>.so\` — republished from Gedsh NDK r23b CI (16 KB page size on 64-bit ABIs via Makefile \`LDFLAGS\`).
+
+          ### Pluggable transports (built here from Tor Project sources)
+          - \`libLyrebird-<abi>.so\` — meek_lite, obfs2/3/4, scramblesuit, webtunnel, **snowflake**
+          - \`libConjure-<abi>.so\` — conjure (\`-registerURL https://registration.refraction.network/api\`)
+          - Linked with \`-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384\` ([Android 16 KB pages](https://developer.android.com/guide/practices/page-sizes))
+          - Go Android: \`-checklinkname=0\` (Tor Browser #41387 / wlynxg/anet)
+
+          See \`CLIENT_TRANSPORT_PLUGIN.txt\` for torrc lines.
+
+          Verify: \`sha256sum -c SHA256SUMS.txt\`
+          EOF
+          )"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/release/* --clobber
+            gh release edit "$TAG" --notes "$NOTES"
+          else
+            gh release create "$TAG" dist/release/* --title "$TAG" --notes "$NOTES"
+          fi
