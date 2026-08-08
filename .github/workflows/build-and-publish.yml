@@ -148,7 +148,7 @@ jobs:
 
       - name: Download libtor artifacts
         if: steps.meta.outputs.build_tor == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: libtor-*
           path: dist/tor-artifacts
@@ -156,7 +156,7 @@ jobs:
 
       - name: Download PT artifacts
         if: steps.meta.outputs.build_pts == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: pluggable-transports
           path: dist/pts
