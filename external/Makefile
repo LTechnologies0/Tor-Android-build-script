@@ -297,8 +297,8 @@ tor/Makefile: tor/configure
 	 	patch -N -p1 --reject-file=- < tor-patch-errno
 	cd tor && \
                 CC="$(CC)" AR="$(AR)" RANLIB=$(RANLIB) PKG_CONFIG_PATH="$(EXTERNAL_ROOT)/lib/pkgconfig" \
-                        CFLAGS="$(CFLAGS) $(TOR_MTE_CFLAGS) -I$(EXTERNAL_ROOT)/include -I$(EXTERNAL_ROOT)/include/event2 -D_FORTIFY_SOURCE=2 -fwrapv -fno-strict-aliasing -fno-strict-overflow" \
-                        LDFLAGS="$(LDFLAGS) $(TOR_MTE_LDFLAGS)" \
+                        CFLAGS="$(CFLAGS) -I$(EXTERNAL_ROOT)/include -I$(EXTERNAL_ROOT)/include/event2 -D_FORTIFY_SOURCE=2 -fwrapv -fno-strict-aliasing -fno-strict-overflow" \
+                        LDFLAGS="$(LDFLAGS)" \
                         LIBS="-L$(EXTERNAL_ROOT)/lib" \
                         ./configure \
                                 --host=$(ALTHOST) \
@@ -308,6 +308,7 @@ tor/Makefile: tor/configure
 				--disable-linker-hardening --disable-gcc-hardening --disable-tool-name-check --disable-systemd
 
 tor-build-stamp: tor/Makefile
+	# Apply MTE after configure (configure link tests fail with -fsanitize=memtag on low APIs).
 	$(MAKE) -j`nproc` -C tor all-am \
 		CFLAGS="$(CFLAGS) $(TOR_MTE_CFLAGS) -I$(EXTERNAL_ROOT)/include -I$(EXTERNAL_ROOT)/include/event2" \
 		LDFLAGS="$(LDFLAGS) $(TOR_MTE_LDFLAGS)"
@@ -353,6 +354,7 @@ showsetup:
 	@echo "NDK_SYSROOT: $(NDK_SYSROOT)"
 	@echo "APP_ABI: $(APP_ABI)"
 	@echo "ENABLE_MTE: $(ENABLE_MTE)"
+	@echo "TOR_MTE_CFLAGS: $(TOR_MTE_CFLAGS)"
 	@echo "HOST: $(HOST)"
 	@echo "CC: $(CC)"
 	@echo "LD: $(LD)"

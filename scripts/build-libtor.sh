@@ -93,10 +93,14 @@ for abi_in in $ABIS; do
   (
     cd "$EXTERNAL"
     make clean || true
-    # shellcheck disable=SC2086
+    # MTE sanitizer requires API 31+; keep API 21 when MTE is off.
+    platform=21
+    if [[ "$mte_flag" == "1" ]]; then
+      platform=31
+    fi
     make \
       APP_ABI="$abi" \
-      NDK_PLATFORM_LEVEL=21 \
+      NDK_PLATFORM_LEVEL="$platform" \
       NDK_BIT=64 \
       ENABLE_MTE="$mte_flag" \
       ANDROID_NDK_HOME="$ANDROID_NDK_HOME"
