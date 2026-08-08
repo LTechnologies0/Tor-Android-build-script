@@ -111,6 +111,5 @@ jobs:
           if ! gh pr list --head "$BRANCH" --json number -q '.[0].number' | grep -q '[0-9]'; then
             gh pr create \
               --title "build(deps): bump upstream pins" \
-              --label dependencies \
               --body "Automated pin refresh from GitLab/GitHub. After merge, rebuild Tor+PTs release for OnionVPN."
           fi
