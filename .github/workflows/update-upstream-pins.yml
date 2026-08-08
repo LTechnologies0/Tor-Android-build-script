@@ -4,7 +4,7 @@ name: Update upstream pins
 
 on:
   schedule:
-    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+    - cron: "0 6 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -54,7 +54,6 @@ for t in json.load(sys.stdin):
           LYRE=$(gl_tag tpo/anti-censorship/pluggable-transports/lyrebird '^lyrebird-')
           OPENSSL=$(gh_tag openssl/openssl openssl-3.)
           ZLIB=$(gh_tag madler/zlib v1.)
-          # conjure: tip of main (no tags)
           CONJ=$(curl -fsSL 'https://gitlab.torproject.org/api/v4/projects/tpo%2Fanti-censorship%2Fpluggable-transports%2Fconjure/repository/commits?ref_name=main&per_page=1' \
             | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])')
           echo "tor_upstream=$TOR_UP" >> "$GITHUB_OUTPUT"
@@ -62,7 +61,6 @@ for t in json.load(sys.stdin):
           echo "openssl=$OPENSSL" >> "$GITHUB_OUTPUT"
           echo "zlib=$ZLIB" >> "$GITHUB_OUTPUT"
           echo "conjure=$CONJ" >> "$GITHUB_OUTPUT"
-          echo "Resolved: tor_up=$TOR_UP lyrebird=$LYRE openssl=$OPENSSL zlib=$ZLIB conjure=${CONJ:0:12}"
 
       - name: Apply bumps to versions.properties
         id: apply
@@ -104,13 +102,8 @@ for t in json.load(sys.stdin):
             gh pr create \
               --title "build(deps): bump upstream pins" \
               --label dependencies \
-              --body "$(cat <<'EOF'
-          ## Summary
-          Automated pin refresh from:
-          - GitLab `tpo/core/tor`, lyrebird, conjure
-          - GitHub `openssl/openssl`, `madler/zlib`
+              --body "## Summary
+          Automated pin refresh from GitLab (tpo/core/tor, lyrebird, conjure) and GitHub (openssl, zlib).
 
-          After merge: rebuild via **Build and publish Tor + PTs** (`tor-*` tag) so OnionVPN can fetch new `.so` files.
-          EOF
-          )"
+          After merge: rebuild via **Build and publish Tor + PTs** so OnionVPN can fetch new .so files."
           fi

@@ -200,18 +200,18 @@ openssl-clean:
 
 #------------------------------------------------------------------------------#
 # zlib (static) — Tor otherwise links NDK libz.so; keep third-party deps in-binary
+# Note: upstream zlib ships a stub Makefile that says "use ./configure first",
+# so we must not key off zlib/Makefile existing — always configure into a stamp.
 
-zlib/Makefile:
-	cp config.sub zlib 2>/dev/null || true
-	cp config.guess zlib 2>/dev/null || true
+zlib-configure-stamp:
 	cd zlib && \
-		CHOST="$(HOST)" CC="$(CC)" AR="$(AR)" RANLIB="$(RANLIB)" CFLAGS="$(CFLAGS)" LDFLAGS="$(LDFLAGS)" \
+		CC="$(CC)" AR="$(AR)" RANLIB="$(RANLIB)" CFLAGS="$(CFLAGS)" \
 		./configure --static --prefix="$(EXTERNAL_ROOT)"
+	touch zlib-configure-stamp
 
-zlib-build-stamp: zlib/Makefile
+zlib-build-stamp: zlib-configure-stamp
 	$(MAKE) -j`nproc` -C zlib
 	$(MAKE) -C zlib install
-	# configure --prefix installs into EXTERNAL_ROOT; ensure libz.a is visible
 	test -f "$(EXTERNAL_ROOT)/lib/libz.a"
 	test -f "$(EXTERNAL_ROOT)/include/zlib.h"
 	touch zlib-build-stamp
@@ -219,7 +219,7 @@ zlib-build-stamp: zlib/Makefile
 zlib: zlib-build-stamp
 
 zlib-clean:
-	-rm -f zlib-build-stamp
+	-rm -f zlib-build-stamp zlib-configure-stamp
 	-rm -f "$(EXTERNAL_ROOT)/lib/libz.a" "$(EXTERNAL_ROOT)/lib/libz.la"
 	-rm -f "$(EXTERNAL_ROOT)/include/zlib.h" "$(EXTERNAL_ROOT)/include/zconf.h"
 	-cd zlib && git clean -fdx || true
