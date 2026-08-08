@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
-# Seed or refresh GitHub Release assets for OnionVPN (LTechnologies0 fork).
+# Build (or reuse) release assets and publish a GitHub Release for OnionVPN.
 #
-# - libtor-*.so: republished from Gedsh GitLab CI (same NDK build)
-# - libLyrebird-*.so / libConjure-*.so: built locally via
-#   scripts/build-pluggable-transports.sh when ANDROID_NDK_HOME is set,
-#   otherwise skipped (use Actions workflow build-and-publish.yml).
+# libtor is built from source via scripts/build-libtor.sh (never downloaded from
+# foreign CI). Pluggable transports are built when ANDROID_NDK_HOME + go exist.
 #
 # Usage:
-#   ./scripts/publish-github-release.sh [tag]
+#   ANDROID_NDK_HOME=/path/to/ndk ./scripts/publish-github-release.sh [tag]
 # Default tag: tor-0.4.9.11-dev
 set -euo pipefail
 
@@ -18,20 +16,23 @@ mkdir -p "$TMP/release"
 
 REPO="${GITHUB_REPOSITORY:-LTechnologies0/Tor-Android-build-script}"
 
-TOR_ARMV7_URL='https://gitlab.com/Gedsh/tor-android-build-script/-/jobs/artifacts/master/raw/tor-android-binary/src/main/libs/armeabi-v7a/libtor.so?job=android%20r23b%2022%20default%20armeabi-v7a'
-TOR_ARM64_URL='https://gitlab.com/Gedsh/tor-android-build-script/-/jobs/artifacts/master/raw/tor-android-binary/src/main/libs/arm64/libtor.so?job=android%20r23b%2022%20default%20arm64-v8a'
-TOR_X86_64_URL='https://gitlab.com/Gedsh/tor-android-build-script/-/jobs/artifacts/master/raw/tor-android-binary/src/main/libs/x86_64/libtor.so?job=android%20r23b%2022%20default%20x86_64'
+if [[ -z "${ANDROID_NDK_HOME:-}" ]]; then
+  echo "ERROR: ANDROID_NDK_HOME required. This script no longer republishes libtor from Gedsh CI." >&2
+  echo "  export ANDROID_NDK_HOME=/path/to/ndk" >&2
+  echo "  ./scripts/build-libtor.sh && ./scripts/publish-github-release.sh $TAG" >&2
+  exit 1
+fi
 
-echo "Fetching Tor binaries (Gedsh GitLab CI → $REPO@$TAG)..."
-curl -fsSL -L -o "$TMP/release/libtor-armeabi-v7a.so" "$TOR_ARMV7_URL"
-curl -fsSL -L -o "$TMP/release/libtor-arm64-v8a.so" "$TOR_ARM64_URL"
-curl -fsSL -L -o "$TMP/release/libtor-x86_64.so" "$TOR_X86_64_URL"
+echo "Building libtor from source → $REPO@$TAG ..."
+chmod +x "$ROOT/scripts/build-libtor.sh"
+ABIS="${ABIS:-arm64 x86_64}" ENABLE_MTE="${ENABLE_MTE:-1}" "$ROOT/scripts/build-libtor.sh"
+cp -f "$ROOT"/dist/tor/libtor-*.so "$TMP/release/"
 
-if [[ -n "${ANDROID_NDK_HOME:-}" ]] && command -v go >/dev/null 2>&1; then
+if command -v go >/dev/null 2>&1; then
   echo "Building pluggable transports (16 KB page size)..."
   chmod +x "$ROOT/scripts/build-pluggable-transports.sh"
-  ABIS="${ABIS:-arm64-v8a x86_64 armeabi-v7a}" "$ROOT/scripts/build-pluggable-transports.sh"
-  for abi in arm64-v8a x86_64 armeabi-v7a; do
+  ABIS="${PT_ABIS:-arm64-v8a x86_64}" "$ROOT/scripts/build-pluggable-transports.sh"
+  for abi in arm64-v8a x86_64; do
     [[ -f "$ROOT/dist/pts/$abi/libLyrebird.so" ]] && \
       cp -f "$ROOT/dist/pts/$abi/libLyrebird.so" "$TMP/release/libLyrebird-${abi}.so"
     [[ -f "$ROOT/dist/pts/$abi/libConjure.so" ]] && \
@@ -40,7 +41,7 @@ if [[ -n "${ANDROID_NDK_HOME:-}" ]] && command -v go >/dev/null 2>&1; then
   [[ -f "$ROOT/dist/pts/CLIENT_TRANSPORT_PLUGIN.txt" ]] && \
     cp -f "$ROOT/dist/pts/CLIENT_TRANSPORT_PLUGIN.txt" "$TMP/release/"
 else
-  echo "NOTE: skip PT build (set ANDROID_NDK_HOME + install go, or use Actions)."
+  echo "NOTE: skip PT build (install go, or use Actions build-and-publish.yml)."
 fi
 
 echo "Staging:"
@@ -51,11 +52,12 @@ NOTES="$(cat <<EOF
 ## Tor Android + pluggable transports (OnionVPN)
 
 ### Tor
-\`libtor-*.so\` — republished from Gedsh NDK r23b CI.
+\`libtor-*.so\` — built from source in this repo (\`scripts/build-libtor.sh\`).
+arm64 may include \`-fsanitize=memtag\` (ENABLE_MTE=1).
 
 ### Pluggable transports
 \`libLyrebird-*.so\` / \`libConjure-*.so\` — built with
-\`-Wl,-z,max-page-size=16384\` (16 KB pages) and Go \`-checklinkname=0\` for Android.
+\`-Wl,-z,max-page-size=16384\` (16 KB pages) and Go \`-checklinkname=0\`.
 
 See \`CLIENT_TRANSPORT_PLUGIN.txt\`. Verify: \`sha256sum -c SHA256SUMS.txt\`
 EOF

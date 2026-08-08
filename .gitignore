@@ -3,3 +3,5 @@
 !external/**
 .android-ndk*/
 android-ndk*/
+# Makefile installs libtor.so here during local/CI builds
+/tor-android-binary/

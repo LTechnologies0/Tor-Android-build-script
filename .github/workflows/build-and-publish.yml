@@ -1,7 +1,9 @@
 # Build Tor + pluggable transports and publish GitHub Release assets for OnionVPN.
 #
+# All binaries are built from source in this repository (no foreign-CI republish).
+#
 # Tags:
-#   tor-*  — full publish (libtor republish + PT build)
+#   tor-*  — full publish (libtor + PT build)
 #   pt-*   — PT binaries only
 name: Build and publish Tor + PTs
 
@@ -17,7 +19,7 @@ on:
         required: true
         default: "pt-nightly"
       build_tor:
-        description: "Also republish libtor.so from Gedsh GitLab CI"
+        description: "Build libtor.so from source (OpenSSL/libevent/zstd/xz/Tor)"
         type: boolean
         default: true
       build_pts:
@@ -32,6 +34,51 @@ env:
   GOTOOLCHAIN: auto
 
 jobs:
+  build-tor:
+    if: >
+      startsWith(github.ref, 'refs/tags/tor-') ||
+      (github.event_name == 'workflow_dispatch' && inputs.build_tor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64, x86_64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            autoconf autogen automake autopoint autotools-dev \
+            gettext-base git libtool make patch pkg-config \
+            ca-certificates curl gzip tar unzip wget python3
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r28c
+          link-to-sdk: true
+
+      - name: Build libtor (${{ matrix.abi }})
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ABIS: ${{ matrix.abi }}
+          # arm64 gets -fsanitize=memtag via ENABLE_MTE=1 in build-libtor.sh
+          ENABLE_MTE: "1"
+        run: |
+          chmod +x scripts/build-libtor.sh
+          ./scripts/build-libtor.sh
+
+      - name: Upload libtor artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libtor-${{ matrix.abi }}
+          path: dist/tor/libtor-*.so
+          if-no-files-found: error
+
   build-pts:
     if: >
       startsWith(github.ref, 'refs/tags/pt-') ||
@@ -55,7 +102,7 @@ jobs:
       - name: Build pluggable transports
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-          ABIS: arm64-v8a x86_64 armeabi-v7a
+          ABIS: arm64-v8a x86_64
           API_LEVEL: "21"
         run: |
           chmod +x scripts/build-pluggable-transports.sh
@@ -70,8 +117,8 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [build-pts]
-    if: always() && (needs.build-pts.result == 'success' || needs.build-pts.result == 'skipped')
+    needs: [build-tor, build-pts]
+    if: always() && (needs.build-tor.result == 'success' || needs.build-tor.result == 'skipped') && (needs.build-pts.result == 'success' || needs.build-pts.result == 'skipped') && (needs.build-tor.result == 'success' || needs.build-pts.result == 'success')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -99,6 +146,14 @@ jobs:
           echo "build_tor=$BUILD_TOR" >> "$GITHUB_OUTPUT"
           echo "build_pts=$BUILD_PTS" >> "$GITHUB_OUTPUT"
 
+      - name: Download libtor artifacts
+        if: steps.meta.outputs.build_tor == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: libtor-*
+          path: dist/tor-artifacts
+          merge-multiple: true
+
       - name: Download PT artifacts
         if: steps.meta.outputs.build_pts == 'true'
         uses: actions/download-artifact@v4
@@ -106,26 +161,15 @@ jobs:
           name: pluggable-transports
           path: dist/pts
 
-      - name: Fetch libtor (Gedsh CI republish)
-        if: steps.meta.outputs.build_tor == 'true'
-        run: |
-          mkdir -p dist/tor
-          curl -fsSL -L -o dist/tor/libtor-armeabi-v7a.so \
-            'https://gitlab.com/Gedsh/tor-android-build-script/-/jobs/artifacts/master/raw/tor-android-binary/src/main/libs/armeabi-v7a/libtor.so?job=android%20r23b%2022%20default%20armeabi-v7a'
-          curl -fsSL -L -o dist/tor/libtor-arm64-v8a.so \
-            'https://gitlab.com/Gedsh/tor-android-build-script/-/jobs/artifacts/master/raw/tor-android-binary/src/main/libs/arm64/libtor.so?job=android%20r23b%2022%20default%20arm64-v8a'
-          curl -fsSL -L -o dist/tor/libtor-x86_64.so \
-            'https://gitlab.com/Gedsh/tor-android-build-script/-/jobs/artifacts/master/raw/tor-android-binary/src/main/libs/x86_64/libtor.so?job=android%20r23b%2022%20default%20x86_64'
-          ls -lh dist/tor/
-
       - name: Stage release assets
         run: |
-          mkdir -p dist/release
-          if [ -d dist/tor ]; then
+          mkdir -p dist/release dist/tor
+          if [ "${{ steps.meta.outputs.build_tor }}" = "true" ]; then
+            find dist/tor-artifacts -name 'libtor-*.so' -exec cp -f {} dist/tor/ \;
             cp -f dist/tor/libtor-*.so dist/release/
           fi
-          if [ -d dist/pts ]; then
-            for abi in arm64-v8a x86_64 armeabi-v7a; do
+          if [ "${{ steps.meta.outputs.build_pts }}" = "true" ] && [ -d dist/pts ]; then
+            for abi in arm64-v8a x86_64; do
               [[ -f "dist/pts/$abi/libLyrebird.so" ]] && cp -f "dist/pts/$abi/libLyrebird.so" "dist/release/libLyrebird-${abi}.so"
               [[ -f "dist/pts/$abi/libConjure.so" ]] && cp -f "dist/pts/$abi/libConjure.so" "dist/release/libConjure-${abi}.so"
             done
@@ -133,6 +177,11 @@ jobs:
           fi
           ls -lh dist/release/
           (cd dist/release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          # Guard: never ship empty tor when build_tor requested
+          if [ "${{ steps.meta.outputs.build_tor }}" = "true" ]; then
+            test -f dist/release/libtor-arm64-v8a.so
+            test -f dist/release/libtor-x86_64.so
+          fi
 
       - name: Create / update GitHub Release
         env:
@@ -142,16 +191,20 @@ jobs:
           NOTES="$(cat <<EOF
           ## Tor Android + pluggable transports (OnionVPN)
 
-          Controlled builds for [OnionVPN](https://github.com/LTechnologies0/OnionVPN).
+          Controlled **from-source** builds for [OnionVPN](https://github.com/LTechnologies0/OnionVPN).
+          No binaries are republished from third-party CI.
 
-          ### Tor
-          - \`libtor-<abi>.so\` — republished from Gedsh NDK r23b CI (16 KB page size on 64-bit ABIs via Makefile \`LDFLAGS\`).
+          ### Tor (\`libtor-<abi>.so\`)
+          - Built here via \`scripts/build-libtor.sh\` + \`external/Makefile\`
+          - Deps: OpenSSL, libevent, zstd, xz, Gedsh \`tor\` (\`prod-0.4.9\`)
+          - NDK r28c, 16 KB page size on 64-bit ABIs
+          - **arm64**: optional MTE instrumentation (\`-fsanitize=memtag\`) for GrapheneOS / \`memtagMode\` apps
 
-          ### Pluggable transports (built here from Tor Project sources)
-          - \`libLyrebird-<abi>.so\` — meek_lite, obfs2/3/4, scramblesuit, webtunnel, **snowflake**
-          - \`libConjure-<abi>.so\` — conjure (\`-registerURL https://registration.refraction.network/api\`)
-          - Linked with \`-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384\` ([Android 16 KB pages](https://developer.android.com/guide/practices/page-sizes))
-          - Go Android: \`-checklinkname=0\` (Tor Browser #41387 / wlynxg/anet)
+          ### Pluggable transports
+          - \`libLyrebird-<abi>.so\` — meek_lite, obfs2/3/4, scramblesuit, webtunnel, snowflake
+          - \`libConjure-<abi>.so\` — conjure
+          - Linked with \`-Wl,-z,max-page-size=16384\` (Android 16 KB pages)
+          - Go: \`-checklinkname=0\` (Tor Browser #41387)
 
           See \`CLIENT_TRANSPORT_PLUGIN.txt\` for torrc lines.
 

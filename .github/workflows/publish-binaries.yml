@@ -1,32 +1,28 @@
-# Republish Tor Android libtor.so assets to GitHub Releases for OnionVPN.
-# Trigger: push tag tor-*  OR  workflow_dispatch
-name: Publish Tor binaries
+# Deprecated: libtor is no longer republished from Gedsh GitLab CI.
+# Use "Build and publish Tor + PTs" (build-and-publish.yml) which builds
+# libtor + pluggable transports from source in this repository.
+name: Publish Tor binaries (retired)
 
 on:
-  push:
-    tags:
-      - "tor-*"
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Release tag (e.g. tor-0.4.9.11-dev)"
+      acknowledge:
+        description: "Type BUILD-FROM-SOURCE to confirm you will use build-and-publish.yml"
         required: true
-        default: "tor-0.4.9.11-dev"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  publish:
+  redirect:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Publish release assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
+      - name: Refuse foreign-CI republish
         run: |
-          chmod +x scripts/publish-github-release.sh
-          TAG="${{ github.event.inputs.tag }}"
-          if [ -z "$TAG" ]; then TAG="${GITHUB_REF_NAME}"; fi
-          ./scripts/publish-github-release.sh "$TAG"
+          echo "::error::publish-binaries.yml no longer republishes libtor from Gedsh GitLab."
+          echo "Use Actions → Build and publish Tor + PTs (tags tor-* / pt-* or workflow_dispatch)."
+          echo "Local: ANDROID_NDK_HOME=... ./scripts/build-libtor.sh"
+          if [ "${{ inputs.acknowledge }}" != "BUILD-FROM-SOURCE" ]; then
+            exit 1
+          fi
+          exit 1

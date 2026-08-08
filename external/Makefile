@@ -96,15 +96,30 @@ else
 endif
 
 
-CFLAGS = -DANDROID $(TARGET_CFLAGS) $(PIEFLAGS) 
+# Prefer unified LLVM sysroot (NDK r23+ / r28); fall back to legacy platforms/.
+NDK_LLVM_SYSROOT := $(NDK_TOOLCHAIN_BASE)/sysroot
+ifeq ($(wildcard $(NDK_LLVM_SYSROOT)/usr/include),$(NDK_LLVM_SYSROOT)/usr/include)
+  NDK_SYSROOT := $(NDK_LLVM_SYSROOT)
+endif
+
+CFLAGS = -DANDROID $(TARGET_CFLAGS) $(PIEFLAGS)
 LDFLAGS = -llog $(TARGET_LDFLAGS) $(PIEFLAGS)
 
 ifeq ($(APP_ABI),arm64)
-    LDFLAGS += -Wl,-z,max-page-size=16384
+    LDFLAGS += -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384
+    # Optional MTE instrumentation for arm64 (OnionVPN / GrapheneOS). Set ENABLE_MTE=1.
+    ifeq ($(ENABLE_MTE),1)
+        CFLAGS += -fsanitize=memtag -fno-omit-frame-pointer
+        LDFLAGS += -fsanitize=memtag
+    endif
 endif
 ifeq ($(APP_ABI),x86_64)
-    LDFLAGS += -Wl,-z,max-page-size=16384
+    LDFLAGS += -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384
 endif
+
+# Export for sub-makes / showsetup
+export ENABLE_MTE
+
 
 # change 'release' to 'debug' for unoptimized debug builds
 ifeq ($(APP_ABI),armeabi-v7a)
@@ -329,6 +344,7 @@ showsetup:
 	@echo "NDK_PLATFORM_LEVEL: $(NDK_PLATFORM_LEVEL)"
 	@echo "NDK_SYSROOT: $(NDK_SYSROOT)"
 	@echo "APP_ABI: $(APP_ABI)"
+	@echo "ENABLE_MTE: $(ENABLE_MTE)"
 	@echo "HOST: $(HOST)"
 	@echo "CC: $(CC)"
 	@echo "LD: $(LD)"
