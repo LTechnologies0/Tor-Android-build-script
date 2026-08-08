@@ -97,9 +97,8 @@ endif
 
 
 # Prefer unified LLVM sysroot (NDK r23+ / r28); fall back to legacy platforms/.
-NDK_LLVM_SYSROOT := $(NDK_TOOLCHAIN_BASE)/sysroot
-ifeq ($(wildcard $(NDK_LLVM_SYSROOT)/usr/include),$(NDK_LLVM_SYSROOT)/usr/include)
-  NDK_SYSROOT := $(NDK_LLVM_SYSROOT)
+ifneq ($(wildcard $(NDK_TOOLCHAIN_BASE)/sysroot/usr/include),)
+  NDK_SYSROOT := $(NDK_TOOLCHAIN_BASE)/sysroot
 endif
 
 CFLAGS = -DANDROID $(TARGET_CFLAGS) $(PIEFLAGS)
@@ -107,17 +106,22 @@ LDFLAGS = -llog $(TARGET_LDFLAGS) $(PIEFLAGS)
 
 ifeq ($(APP_ABI),arm64)
     LDFLAGS += -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384
-    # Optional MTE instrumentation for arm64 (OnionVPN / GrapheneOS). Set ENABLE_MTE=1.
-    ifeq ($(ENABLE_MTE),1)
-        CFLAGS += -fsanitize=memtag -fno-omit-frame-pointer
-        LDFLAGS += -fsanitize=memtag
-    endif
 endif
 ifeq ($(APP_ABI),x86_64)
     LDFLAGS += -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384
 endif
 
-# Export for sub-makes / showsetup
+# MTE only on the final Tor binary — do not put -fsanitize=memtag in global
+# CFLAGS (breaks OpenSSL/xz/libevent configure link tests on API 21).
+TOR_MTE_CFLAGS :=
+TOR_MTE_LDFLAGS :=
+ifeq ($(APP_ABI),arm64)
+  ifeq ($(ENABLE_MTE),1)
+    TOR_MTE_CFLAGS := -fsanitize=memtag -fno-omit-frame-pointer
+    TOR_MTE_LDFLAGS := -fsanitize=memtag
+  endif
+endif
+
 export ENABLE_MTE
 
 
@@ -292,8 +296,10 @@ tor/Makefile: tor/configure
 	-cd tor && \
 	 	patch -N -p1 --reject-file=- < tor-patch-errno
 	cd tor && \
-                CC="$(CC)" AR="$(AR)" RANLIB=$(RANLIB) PKG_CONFIG_PATH="$(EXTERNAL_ROOT)/lib/pkgconfig" CFLAGS="$(CFLAGS) -D_FORTIFY_SOURCE=2 -fwrapv -fno-strict-aliasing -fno-strict-overflow" LDFLAGS="$(LDFLAGS)" \
-                        LIBS="-L$(EXTERNAL_ROOT)/lib" CFLAGS="-I$(EXTERNAL_ROOT)/include -I$(EXTERNAL_ROOT)/include/event2" \
+                CC="$(CC)" AR="$(AR)" RANLIB=$(RANLIB) PKG_CONFIG_PATH="$(EXTERNAL_ROOT)/lib/pkgconfig" \
+                        CFLAGS="$(CFLAGS) $(TOR_MTE_CFLAGS) -I$(EXTERNAL_ROOT)/include -I$(EXTERNAL_ROOT)/include/event2 -D_FORTIFY_SOURCE=2 -fwrapv -fno-strict-aliasing -fno-strict-overflow" \
+                        LDFLAGS="$(LDFLAGS) $(TOR_MTE_LDFLAGS)" \
+                        LIBS="-L$(EXTERNAL_ROOT)/lib" \
                         ./configure \
                                 --host=$(ALTHOST) \
 				--disable-asciidoc --enable-android --disable-system-torrc \
@@ -302,7 +308,9 @@ tor/Makefile: tor/configure
 				--disable-linker-hardening --disable-gcc-hardening --disable-tool-name-check --disable-systemd
 
 tor-build-stamp: tor/Makefile
-	$(MAKE) -j`nproc` -C tor all-am
+	$(MAKE) -j`nproc` -C tor all-am \
+		CFLAGS="$(CFLAGS) $(TOR_MTE_CFLAGS) -I$(EXTERNAL_ROOT)/include -I$(EXTERNAL_ROOT)/include/event2" \
+		LDFLAGS="$(LDFLAGS) $(TOR_MTE_LDFLAGS)"
 	touch tor-build-stamp
 
 tor: lzma zstd libevent openssl tor-build-stamp
