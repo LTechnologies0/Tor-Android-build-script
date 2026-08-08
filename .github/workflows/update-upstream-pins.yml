@@ -25,42 +25,52 @@ jobs:
         id: tags
         run: |
           set -euo pipefail
-          gl_tag() {
-            local project="$1" pattern="$2"
-            local enc
-            enc=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$project")
-            curl -fsSL "https://gitlab.torproject.org/api/v4/projects/${enc}/repository/tags?per_page=30" \
-              | python3 -c "
-import json,sys,re
-pat=re.compile(sys.argv[1])
-for t in json.load(sys.stdin):
-  if pat.match(t['name']):
-    print(t['name']); break
-" "$pattern"
-          }
-          gh_tag() {
-            local repo="$1" prefix="$2"
-            curl -fsSL "https://api.github.com/repos/${repo}/tags?per_page=20" \
-              | python3 -c "
-import json,sys
-prefix=sys.argv[1]
-for t in json.load(sys.stdin):
-  n=t['name']
-  if n.startswith(prefix) and 'alpha' not in n.lower() and 'beta' not in n.lower():
-    print(n); break
-" "$prefix"
-          }
-          TOR_UP=$(gl_tag tpo/core/tor '^tor-0\.4\.9\.\d+$')
-          LYRE=$(gl_tag tpo/anti-censorship/pluggable-transports/lyrebird '^lyrebird-')
-          OPENSSL=$(gh_tag openssl/openssl openssl-3.)
-          ZLIB=$(gh_tag madler/zlib v1.)
-          CONJ=$(curl -fsSL 'https://gitlab.torproject.org/api/v4/projects/tpo%2Fanti-censorship%2Fpluggable-transports%2Fconjure/repository/commits?ref_name=main&per_page=1' \
-            | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])')
-          echo "tor_upstream=$TOR_UP" >> "$GITHUB_OUTPUT"
-          echo "lyrebird=$LYRE" >> "$GITHUB_OUTPUT"
-          echo "openssl=$OPENSSL" >> "$GITHUB_OUTPUT"
-          echo "zlib=$ZLIB" >> "$GITHUB_OUTPUT"
-          echo "conjure=$CONJ" >> "$GITHUB_OUTPUT"
+          python3 <<'PY'
+          import json, os, re, urllib.parse, urllib.request
+
+          def get(url: str):
+              req = urllib.request.Request(url, headers={"User-Agent": "tor-android-pin-bot"})
+              with urllib.request.urlopen(req) as r:
+                  return json.load(r)
+
+          def gl_tag(project: str, pattern: str) -> str:
+              enc = urllib.parse.quote(project, safe="")
+              tags = get(f"https://gitlab.torproject.org/api/v4/projects/{enc}/repository/tags?per_page=30")
+              pat = re.compile(pattern)
+              for t in tags:
+                  if pat.match(t["name"]):
+                      return t["name"]
+              raise SystemExit(f"no tag matching {pattern} in {project}")
+
+          def gh_tag(repo: str, prefix: str) -> str:
+              tags = get(f"https://api.github.com/repos/{repo}/tags?per_page=20")
+              for t in tags:
+                  n = t["name"]
+                  if n.startswith(prefix) and "alpha" not in n.lower() and "beta" not in n.lower():
+                      return n
+              raise SystemExit(f"no tag with prefix {prefix} in {repo}")
+
+          tor_up = gl_tag("tpo/core/tor", r"^tor-0\.4\.9\.\d+$")
+          lyre = gl_tag("tpo/anti-censorship/pluggable-transports/lyrebird", r"^lyrebird-")
+          openssl = gh_tag("openssl/openssl", "openssl-3.")
+          zlib = gh_tag("madler/zlib", "v1.")
+          conj = get(
+              "https://gitlab.torproject.org/api/v4/projects/"
+              "tpo%2Fanti-censorship%2Fpluggable-transports%2Fconjure"
+              "/repository/commits?ref_name=main&per_page=1"
+          )[0]["id"]
+
+          lines = [
+              f"tor_upstream={tor_up}",
+              f"lyrebird={lyre}",
+              f"openssl={openssl}",
+              f"zlib={zlib}",
+              f"conjure={conj}",
+          ]
+          print("\n".join(lines))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+              f.write("\n".join(lines) + "\n")
+          PY
 
       - name: Apply bumps to versions.properties
         id: apply
@@ -102,8 +112,5 @@ for t in json.load(sys.stdin):
             gh pr create \
               --title "build(deps): bump upstream pins" \
               --label dependencies \
-              --body "## Summary
-          Automated pin refresh from GitLab (tpo/core/tor, lyrebird, conjure) and GitHub (openssl, zlib).
-
-          After merge: rebuild via **Build and publish Tor + PTs** so OnionVPN can fetch new .so files."
+              --body "Automated pin refresh from GitLab/GitHub. After merge, rebuild Tor+PTs release for OnionVPN."
           fi
