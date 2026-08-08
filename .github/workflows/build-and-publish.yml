@@ -45,7 +45,7 @@ jobs:
       matrix:
         abi: [arm64, x86_64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install build dependencies
         run: |
@@ -86,7 +86,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.build_pts)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v5
         with:
@@ -121,7 +121,7 @@ jobs:
     if: always() && (needs.build-tor.result == 'success' || needs.build-tor.result == 'skipped') && (needs.build-pts.result == 'success' || needs.build-pts.result == 'skipped') && (needs.build-tor.result == 'success' || needs.build-pts.result == 'success')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Resolve tag
         id: meta
