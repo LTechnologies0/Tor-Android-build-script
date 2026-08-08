@@ -117,7 +117,8 @@ TOR_MTE_CFLAGS :=
 TOR_MTE_LDFLAGS :=
 ifeq ($(APP_ABI),arm64)
   ifeq ($(ENABLE_MTE),1)
-    TOR_MTE_CFLAGS := -fsanitize=memtag -fno-omit-frame-pointer
+    # Clang expands -fsanitize=memtag to memtag-stack which needs +memtag in -march.
+    TOR_MTE_CFLAGS := -march=armv8-a+memtag -fsanitize=memtag -fno-omit-frame-pointer
     TOR_MTE_LDFLAGS := -fsanitize=memtag
   endif
 endif
