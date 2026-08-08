@@ -69,7 +69,7 @@ jobs:
           # arm64 gets -fsanitize=memtag via ENABLE_MTE=1 in build-libtor.sh
           ENABLE_MTE: "1"
         run: |
-          chmod +x scripts/build-libtor.sh
+          chmod +x scripts/build-libtor.sh scripts/verify-android-standalone.sh scripts/load-versions.sh
           ./scripts/build-libtor.sh
 
       - name: Upload libtor artifact
@@ -105,7 +105,7 @@ jobs:
           ABIS: arm64-v8a x86_64
           API_LEVEL: "21"
         run: |
-          chmod +x scripts/build-pluggable-transports.sh
+          chmod +x scripts/build-pluggable-transports.sh scripts/verify-android-standalone.sh scripts/load-versions.sh
           ./scripts/build-pluggable-transports.sh
 
       - name: Upload PT artifacts
@@ -196,15 +196,17 @@ jobs:
 
           ### Tor (\`libtor-<abi>.so\`)
           - Built here via \`scripts/build-libtor.sh\` + \`external/Makefile\`
-          - Deps: OpenSSL, libevent, zstd, xz, Gedsh \`tor\` (\`prod-0.4.9\`)
+          - Deps **static**: OpenSSL, libevent, zstd, xz, **zlib** (\`--enable-static-zlib\`), Gedsh \`tor\` (\`prod-0.4.9\`)
+          - Standalone gate: \`NEEDED\` ⊆ \`libc|libm|libdl|liblog\` (\`scripts/verify-android-standalone.sh\`)
           - NDK r28c, 16 KB page size on 64-bit ABIs
           - **arm64**: optional MTE instrumentation (\`-fsanitize=memtag\`) for GrapheneOS / \`memtagMode\` apps
 
           ### Pluggable transports
-          - \`libLyrebird-<abi>.so\` — meek_lite, obfs2/3/4, scramblesuit, webtunnel, snowflake
-          - \`libConjure-<abi>.so\` — conjure
+          - \`libLyrebird-<abi>.so\` — meek_lite, obfs2/3/4, scramblesuit, webtunnel, snowflake (pinned tag in \`versions.properties\`)
+          - \`libConjure-<abi>.so\` — conjure (pinned commit SHA)
           - Linked with \`-Wl,-z,max-page-size=16384\` (Android 16 KB pages)
-          - Go: \`-checklinkname=0\` (Tor Browser #41387)
+          - Go: \`-buildmode=pie -checklinkname=0\` (Tor Browser #41387)
+          - Same standalone \`NEEDED\` allowlist as libtor
 
           See \`CLIENT_TRANSPORT_PLUGIN.txt\` for torrc lines.
 
@@ -217,3 +219,20 @@ jobs:
           else
             gh release create "$TAG" dist/release/* --title "$TAG" --notes "$NOTES"
           fi
+
+      - name: Notify OnionVPN (repository_dispatch)
+        if: success()
+        env:
+          # PAT with repo scope on LTechnologies0/OnionVPN (Actions GITHUB_TOKEN cannot dispatch cross-repo).
+          GH_TOKEN: ${{ secrets.ONIONVPN_DISPATCH_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "Skip OnionVPN dispatch — set secret ONIONVPN_DISPATCH_TOKEN to enable."
+            exit 0
+          fi
+          gh api repos/LTechnologies0/OnionVPN/dispatches \
+            -f event_type=tor-natives-release \
+            -f "client_payload[tag]=${TAG}"
+          echo "Dispatched tor-natives-release tag=$TAG → OnionVPN"

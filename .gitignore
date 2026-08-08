@@ -1,7 +1,19 @@
 /dist/
 *.so
-!external/**
 .android-ndk*/
 android-ndk*/
 # Makefile installs libtor.so here during local/CI builds
 /tor-android-binary/
+
+# Cloned / built under external/ — keep Makefile, patches, config.*
+/external/openssl/
+/external/libevent/
+/external/zstd/
+/external/xz/
+/external/zlib/
+/external/tor/
+/external/lib/
+/external/include/
+/external/bin/
+/external/*-build-stamp
+/external/*-clean

@@ -35,9 +35,9 @@ NDK_BIT ?= 32
 APP_ABI ?= armeabi
 NDK_ABI ?= $(APP_ABI)
 
-# PIEFLAGS for SDK 16/Android L must be set to -fPIE -pie, but can override for earlier targets 
-//PIEFLAGS ?= -fPIE -pie
+# Compile as PIE; add -pie only on the final Tor link (openssl/libevent .a builds break with -pie).
 PIEFLAGS ?= -fPIE
+TOR_PIE_LDFLAGS ?= -pie
 
 ifneq ($(filter arm%, $(APP_ABI)),)
   NDK_ABI := arm
@@ -140,6 +140,7 @@ LDFLAGS += -Wl,--gc-sections
 .PHONY = clean showsetup \
 	assets assets-clean \
 	openssl-static openssl-static-clean \
+	zlib zlib-clean \
 	libevent libevent-clean \
 	lzma lzma-clean \
 	zstd zstd-clean \
@@ -196,6 +197,32 @@ openssl-clean:
 	-rm lib/libssl.a
 	-cd openssl && \
 		git clean -fdx
+
+#------------------------------------------------------------------------------#
+# zlib (static) — Tor otherwise links NDK libz.so; keep third-party deps in-binary
+
+zlib/Makefile:
+	cp config.sub zlib 2>/dev/null || true
+	cp config.guess zlib 2>/dev/null || true
+	cd zlib && \
+		CHOST="$(HOST)" CC="$(CC)" AR="$(AR)" RANLIB="$(RANLIB)" CFLAGS="$(CFLAGS)" LDFLAGS="$(LDFLAGS)" \
+		./configure --static --prefix="$(EXTERNAL_ROOT)"
+
+zlib-build-stamp: zlib/Makefile
+	$(MAKE) -j`nproc` -C zlib
+	$(MAKE) -C zlib install
+	# configure --prefix installs into EXTERNAL_ROOT; ensure libz.a is visible
+	test -f "$(EXTERNAL_ROOT)/lib/libz.a"
+	test -f "$(EXTERNAL_ROOT)/include/zlib.h"
+	touch zlib-build-stamp
+
+zlib: zlib-build-stamp
+
+zlib-clean:
+	-rm -f zlib-build-stamp
+	-rm -f "$(EXTERNAL_ROOT)/lib/libz.a" "$(EXTERNAL_ROOT)/lib/libz.la"
+	-rm -f "$(EXTERNAL_ROOT)/include/zlib.h" "$(EXTERNAL_ROOT)/include/zconf.h"
+	-cd zlib && git clean -fdx || true
 
 #------------------------------------------------------------------------------#
 # libevent
@@ -290,7 +317,7 @@ tor/configure:
 	cd tor && \
 	 ./autogen.sh
 
-tor/Makefile: tor/configure
+tor/Makefile: tor/configure zlib
 	cp config.sub tor
 	cp config.guess tor
 	cp tor-patch-errno tor
@@ -299,23 +326,24 @@ tor/Makefile: tor/configure
 	cd tor && \
                 CC="$(CC)" AR="$(AR)" RANLIB=$(RANLIB) PKG_CONFIG_PATH="$(EXTERNAL_ROOT)/lib/pkgconfig" \
                         CFLAGS="$(CFLAGS) -I$(EXTERNAL_ROOT)/include -I$(EXTERNAL_ROOT)/include/event2 -D_FORTIFY_SOURCE=2 -fwrapv -fno-strict-aliasing -fno-strict-overflow" \
-                        LDFLAGS="$(LDFLAGS)" \
+                        LDFLAGS="$(LDFLAGS) $(TOR_PIE_LDFLAGS)" \
                         LIBS="-L$(EXTERNAL_ROOT)/lib" \
                         ./configure \
                                 --host=$(ALTHOST) \
 				--disable-asciidoc --enable-android --disable-system-torrc \
 				--enable-static-libevent --with-libevent-dir=$(EXTERNAL_ROOT) \
 				--enable-static-openssl --with-openssl-dir=$(EXTERNAL_ROOT) \
+				--enable-static-zlib --with-zlib-dir=$(EXTERNAL_ROOT) \
 				--disable-linker-hardening --disable-gcc-hardening --disable-tool-name-check --disable-systemd
 
 tor-build-stamp: tor/Makefile
 	# Apply MTE after configure (configure link tests fail with -fsanitize=memtag on low APIs).
 	$(MAKE) -j`nproc` -C tor all-am \
 		CFLAGS="$(CFLAGS) $(TOR_MTE_CFLAGS) -I$(EXTERNAL_ROOT)/include -I$(EXTERNAL_ROOT)/include/event2" \
-		LDFLAGS="$(LDFLAGS) $(TOR_MTE_LDFLAGS)"
+		LDFLAGS="$(LDFLAGS) $(TOR_PIE_LDFLAGS) $(TOR_MTE_LDFLAGS)"
 	touch tor-build-stamp
 
-tor: lzma zstd libevent openssl tor-build-stamp
+tor: zlib lzma zstd libevent openssl tor-build-stamp
 	test -d bin || mkdir bin
 	cp tor/src/app/tor bin
 
@@ -343,7 +371,7 @@ assets-clean:
 # cleanup, cleanup, put the toys away
 
 ##clean: openssl-clean libevent-clean tor-clean polipo-clean assets-clean
-clean: openssl-clean libevent-clean lzma-clean zstd-clean tor-clean
+clean: openssl-clean zlib-clean libevent-clean lzma-clean zstd-clean tor-clean
 
 #------------------------------------------------------------------------------#
 # debugging stuff

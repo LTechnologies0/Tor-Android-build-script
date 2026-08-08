@@ -16,6 +16,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=load-versions.sh
+. "${ROOT}/scripts/load-versions.sh"
+
 DIST="${ROOT}/dist/pts"
 WORKDIR="${TMPDIR:-/tmp}/ltech-pt-build"
 mkdir -p "$DIST" "$WORKDIR"
@@ -35,12 +38,6 @@ fi
 
 API_LEVEL="${API_LEVEL:-21}"
 ABIS="${ABIS:-arm64-v8a x86_64 armeabi-v7a}"
-
-# Pin versions (override with env). Tor Browser 15.x era defaults.
-LYREBIRD_REF="${LYREBIRD_REF:-main}"
-CONJURE_REF="${CONJURE_REF:-main}"
-LYREBIRD_REPO="${LYREBIRD_REPO:-https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird.git}"
-CONJURE_REPO="${CONJURE_REPO:-https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/conjure.git}"
 
 HOST_TAG="$(uname -s | tr '[:upper:]' '[:lower:]')-x86_64"
 TOOLCHAIN="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/${HOST_TAG}"
@@ -65,11 +62,20 @@ clone_or_update() {
   local url="$1" dest="$2" ref="$3"
   if [[ -d "$dest/.git" ]]; then
     git -C "$dest" fetch --depth 1 origin "$ref" || git -C "$dest" fetch --depth 1 origin
-    git -C "$dest" checkout -f FETCH_HEAD 2>/dev/null || git -C "$dest" checkout -f "$ref"
+    git -C "$dest" checkout -f "$ref" 2>/dev/null \
+      || git -C "$dest" checkout -f FETCH_HEAD 2>/dev/null \
+      || git -C "$dest" checkout -f "$ref"
   else
     rm -rf "$dest"
-    git clone --depth 1 --branch "$ref" "$url" "$dest" \
-      || git clone --depth 1 "$url" "$dest"
+    # Tags/branches: shallow clone. Full SHA: clone then fetch SHA.
+    if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+      git clone --filter=blob:none "$url" "$dest"
+      git -C "$dest" fetch --depth 1 origin "$ref"
+      git -C "$dest" checkout -f "$ref"
+    else
+      git clone --depth 1 --branch "$ref" "$url" "$dest" \
+        || { git clone --depth 1 "$url" "$dest"; git -C "$dest" checkout -f "$ref"; }
+    fi
   fi
 }
 
@@ -115,7 +121,6 @@ build_one() {
   echo "Building $outname ($abi / GOARCH=$goarch)..."
   (
     cd "$WORKDIR/$project"
-    # Ensure modules
     go mod download
 
     export CGO_ENABLED=1
@@ -125,9 +130,10 @@ build_one() {
     export CGO_CFLAGS="-O2 -fPIC"
     export CGO_LDFLAGS="${PAGE_LDFLAGS}"
     # Go 1.23+ Android needs -checklinkname=0 for wlynxg/anet (Tor Browser #41387)
-    local ldflags='-s -w -checklinkname=0'
-    # Build as PIE executable packaged as lib*.so (Tor Browser / Orbot convention)
-    go build -trimpath -ldflags "$ldflags" -o "${outdir}/${outname}" "$pkg"
+    # Pin PIE + 16KB via extldflags (Android-standalone Go PT).
+    go build -buildmode=pie -trimpath \
+      -ldflags "-s -w -checklinkname=0 -extldflags '${PAGE_LDFLAGS}'" \
+      -o "${outdir}/${outname}" "$pkg"
   )
 
   local bytes
@@ -165,6 +171,9 @@ for so in "$DIST"/*/lib*.so; do
   [[ -f "$so" ]] || continue
   verify_align "$so"
 done
+
+chmod +x "${ROOT}/scripts/verify-android-standalone.sh"
+"${ROOT}/scripts/verify-android-standalone.sh" --dir "$DIST"
 
 # Write ClientTransportPlugin cheat-sheet for OnionVPN / docs
 cat >"$DIST/CLIENT_TRANSPORT_PLUGIN.txt" <<'EOF'

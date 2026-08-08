@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build libtor.so for Android from source (OpenSSL, libevent, zstd, xz, Tor).
+# Build libtor.so for Android from source (OpenSSL, libevent, zstd, xz, zlib, Tor).
 # No republish from foreign CI — clones pinned upstreams and runs external/Makefile.
 #
 # Usage:
@@ -12,6 +12,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=load-versions.sh
+. "${ROOT}/scripts/load-versions.sh"
+
 EXTERNAL="${ROOT}/external"
 DIST_TOR="${ROOT}/dist/tor"
 mkdir -p "$DIST_TOR" "$EXTERNAL"
@@ -34,14 +37,6 @@ export ANDROID_NDK_HOME
 ABIS="${ABIS:-arm64 x86_64}"
 ENABLE_MTE="${ENABLE_MTE:-1}"
 
-# Pinned deps — keep in sync with .gitlab-ci.yml
-OPENSSL_REF="${OPENSSL_REF:-openssl-3.6.3}"
-LIBEVENT_REF="${LIBEVENT_REF:-release-2.1.12-stable}"
-ZSTD_REF="${ZSTD_REF:-v1.4.9}"
-XZ_REF="${XZ_REF:-v5.2.4}"
-TOR_REF="${TOR_REF:-prod-0.4.9}"
-TOR_REPO="${TOR_REPO:-https://gitlab.torproject.org/Gedsh/tor.git}"
-
 clone_or_update() {
   local url="$1" dest="$2" ref="$3"
   if [[ -d "$dest/.git" ]]; then
@@ -53,18 +48,24 @@ clone_or_update() {
   else
     echo "Cloning $(basename "$dest") @$ref ..."
     rm -rf "$dest"
-    git clone --depth 1 --single-branch --branch "$ref" "$url" "$dest"
+    if ! git clone --depth 1 --single-branch --branch "$ref" "$url" "$dest" 2>/dev/null; then
+      git clone --depth 1 "$url" "$dest"
+      git -C "$dest" fetch --depth 1 origin "$ref" || true
+      git -C "$dest" checkout -f "$ref" 2>/dev/null || git -C "$dest" checkout -f FETCH_HEAD
+    fi
   fi
 }
 
 echo "NDK=$ANDROID_NDK_HOME"
 echo "ABIS=$ABIS ENABLE_MTE=$ENABLE_MTE"
+echo "pins: openssl=$OPENSSL_REF zlib=$ZLIB_REF tor=$TOR_REPO @$TOR_REF"
 
 cd "$EXTERNAL"
 clone_or_update "https://github.com/openssl/openssl.git" "$EXTERNAL/openssl" "$OPENSSL_REF"
 clone_or_update "https://github.com/libevent/libevent.git" "$EXTERNAL/libevent" "$LIBEVENT_REF"
 clone_or_update "https://github.com/facebook/zstd.git" "$EXTERNAL/zstd" "$ZSTD_REF"
-clone_or_update "https://git.tukaani.org/xz.git" "$EXTERNAL/xz" "$XZ_REF"
+clone_or_update "${XZ_REPO}" "$EXTERNAL/xz" "$XZ_REF"
+clone_or_update "${ZLIB_REPO}" "$EXTERNAL/zlib" "$ZLIB_REF"
 clone_or_update "$TOR_REPO" "$EXTERNAL/tor" "$TOR_REF"
 
 abi_to_release_name() {
@@ -111,6 +112,8 @@ for abi_in in $ABIS; do
     exit 1
   fi
   cp -f "$src" "${DIST_TOR}/libtor-${rel}.so"
+  chmod +x "${ROOT}/scripts/verify-android-standalone.sh"
+  "${ROOT}/scripts/verify-android-standalone.sh" "${DIST_TOR}/libtor-${rel}.so"
   ls -lh "${DIST_TOR}/libtor-${rel}.so"
 done
 

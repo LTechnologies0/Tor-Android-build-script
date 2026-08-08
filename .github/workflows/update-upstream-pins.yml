@@ -1,0 +1,116 @@
+# Dependabot cannot watch GitLab tags or shell pin files.
+# This workflow polls upstreams and opens PRs against versions.properties.
+name: Update upstream pins
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-upstream-pins
+  cancel-in-progress: true
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve latest upstream tags
+        id: tags
+        run: |
+          set -euo pipefail
+          gl_tag() {
+            local project="$1" pattern="$2"
+            local enc
+            enc=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$project")
+            curl -fsSL "https://gitlab.torproject.org/api/v4/projects/${enc}/repository/tags?per_page=30" \
+              | python3 -c "
+import json,sys,re
+pat=re.compile(sys.argv[1])
+for t in json.load(sys.stdin):
+  if pat.match(t['name']):
+    print(t['name']); break
+" "$pattern"
+          }
+          gh_tag() {
+            local repo="$1" prefix="$2"
+            curl -fsSL "https://api.github.com/repos/${repo}/tags?per_page=20" \
+              | python3 -c "
+import json,sys
+prefix=sys.argv[1]
+for t in json.load(sys.stdin):
+  n=t['name']
+  if n.startswith(prefix) and 'alpha' not in n.lower() and 'beta' not in n.lower():
+    print(n); break
+" "$prefix"
+          }
+          TOR_UP=$(gl_tag tpo/core/tor '^tor-0\.4\.9\.\d+$')
+          LYRE=$(gl_tag tpo/anti-censorship/pluggable-transports/lyrebird '^lyrebird-')
+          OPENSSL=$(gh_tag openssl/openssl openssl-3.)
+          ZLIB=$(gh_tag madler/zlib v1.)
+          # conjure: tip of main (no tags)
+          CONJ=$(curl -fsSL 'https://gitlab.torproject.org/api/v4/projects/tpo%2Fanti-censorship%2Fpluggable-transports%2Fconjure/repository/commits?ref_name=main&per_page=1' \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])')
+          echo "tor_upstream=$TOR_UP" >> "$GITHUB_OUTPUT"
+          echo "lyrebird=$LYRE" >> "$GITHUB_OUTPUT"
+          echo "openssl=$OPENSSL" >> "$GITHUB_OUTPUT"
+          echo "zlib=$ZLIB" >> "$GITHUB_OUTPUT"
+          echo "conjure=$CONJ" >> "$GITHUB_OUTPUT"
+          echo "Resolved: tor_up=$TOR_UP lyrebird=$LYRE openssl=$OPENSSL zlib=$ZLIB conjure=${CONJ:0:12}"
+
+      - name: Apply bumps to versions.properties
+        id: apply
+        run: |
+          set -euo pipefail
+          F=versions.properties
+          changed=false
+          bump() {
+            local key="$1" val="$2"
+            local cur
+            cur=$(grep -E "^${key}=" "$F" | cut -d= -f2- | tr -d '[:space:]')
+            if [ "$cur" != "$val" ] && [ -n "$val" ]; then
+              sed -i "s|^${key}=.*|${key}=${val}|" "$F"
+              echo "bump $key: $cur -> $val"
+              changed=true
+            fi
+          }
+          bump tor.upstream.tag "${{ steps.tags.outputs.tor_upstream }}"
+          bump lyrebird.ref "${{ steps.tags.outputs.lyrebird }}"
+          bump openssl.ref "${{ steps.tags.outputs.openssl }}"
+          bump zlib.ref "${{ steps.tags.outputs.zlib }}"
+          bump conjure.ref "${{ steps.tags.outputs.conjure }}"
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+
+      - name: Open pull request
+        if: steps.apply.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          BRANCH="deps/upstream-pins-$(date -u +%Y%m%d)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add versions.properties
+          git commit -m "build(deps): bump upstream pins from GitLab/GitHub"
+          git push -u origin "$BRANCH" --force
+          if ! gh pr list --head "$BRANCH" --json number -q '.[0].number' | grep -q '[0-9]'; then
+            gh pr create \
+              --title "build(deps): bump upstream pins" \
+              --label dependencies \
+              --body "$(cat <<'EOF'
+          ## Summary
+          Automated pin refresh from:
+          - GitLab `tpo/core/tor`, lyrebird, conjure
+          - GitHub `openssl/openssl`, `madler/zlib`
+
+          After merge: rebuild via **Build and publish Tor + PTs** (`tor-*` tag) so OnionVPN can fetch new `.so` files.
+          EOF
+          )"
+          fi
