@@ -73,7 +73,7 @@ jobs:
           ./scripts/build-libtor.sh
 
       - name: Upload libtor artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: libtor-${{ matrix.abi }}
           path: dist/tor/libtor-*.so
@@ -109,7 +109,7 @@ jobs:
           ./scripts/build-pluggable-transports.sh
 
       - name: Upload PT artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pluggable-transports
           path: |
